@@ -1,0 +1,167 @@
+# Imports
+from java.net import URL
+from javax.net.ssl import HttpsURLConnection
+from java.util import Base64
+from java.io import BufferedReader, InputStreamReader
+import json
+from java.lang import Thread  # Importing Thread for sleep method
+import random
+
+# Authentication configuration
+username = "user@domain.edu"
+api_token = "<API-KEY>"
+auth_string = "{}:{}".format(username, api_token)
+encoded_auth = Base64.getEncoder().encodeToString(auth_string.encode("UTF-8"))
+
+# Define constants for rate limiting
+max_retries = 4
+last_retry_delay_millis = 5000
+max_retry_delay_millis = 30000
+jitter_multiplier_range = (0.7, 1.3)
+
+def fetch_display_name_from_page(page_id):
+    # Step 1: Fetch the ownerId from the page
+    base_url_page = "https://harvardwiki.atlassian.net/wiki/api/v2/pages/{}"
+    url_page = base_url_page.format(page_id)
+
+    # Variables to manage retries for the first API call
+    retry_count = 0
+    last_delay = last_retry_delay_millis
+
+    owner_id = None
+
+    while retry_count <= max_retries:
+        try:
+            # Open a connection to the URL
+            connection = URL(url_page).openConnection()
+            connection.setRequestMethod("GET")
+            connection.setRequestProperty("Authorization", "Basic " + encoded_auth)
+            connection.setRequestProperty("Accept", "application/json")
+
+            # Get the response code
+            response_code = connection.getResponseCode()
+
+            if response_code == 200:
+                # Read the response
+                bufferedReader = BufferedReader(InputStreamReader(connection.getInputStream(), "UTF-8"))
+                response_data = []
+                line = bufferedReader.readLine()
+                while line is not None:
+                    response_data.append(line)
+                    line = bufferedReader.readLine()
+                bufferedReader.close()
+
+                # Convert response data to a single string
+                response_str = ''.join(response_data)
+
+                # Parse JSON response
+                json_response = json.loads(response_str)
+
+                # Extract ownerId
+                owner_id = json_response.get('ownerId', None)
+                break
+
+            elif response_code == 429 or "Retry-After" in connection.getHeaderFields() and retry_count < max_retries:
+                # Handle rate limiting
+                retry_after_header = connection.getHeaderField("Retry-After")
+                if retry_after_header:
+                    retry_delay_millis = 1000 * float(retry_after_header)
+                else:
+                    retry_delay_millis = min(2 * last_delay, max_retry_delay_millis)
+
+                # Add jitter
+                jitter_multiplier = random.uniform(*jitter_multiplier_range)
+                retry_delay_millis = int(retry_delay_millis * jitter_multiplier)
+
+                # Log and delay
+                print("Retrying page fetch after {} ms due to 429 Too Many Requests.".format(retry_delay_millis))
+                Thread.sleep(retry_delay_millis)
+
+                # Update last delay and retry count
+                last_delay = retry_delay_millis
+                retry_count += 1
+
+            else:
+                return "Error fetching page: HTTP response code " + str(response_code)
+
+        except Exception as e:
+            return str(e)
+
+    # If ownerId was successfully retrieved, proceed to fetch the displayName
+    if owner_id:
+        return fetch_display_name(owner_id)
+    else:
+        return "Failed to retrieve ownerId"
+
+def fetch_display_name(user_uuid):
+    # Step 2: Fetch the displayName using the ownerId
+    base_url_user = "https://harvardwiki.atlassian.net/wiki/rest/api/user"
+    url_user = "{}?accountId={}".format(base_url_user, user_uuid)
+
+    # Variables to manage retries for the second API call
+    retry_count = 0
+    last_delay = last_retry_delay_millis
+
+    while retry_count <= max_retries:
+        try:
+            # Open a connection to the URL
+            connection = URL(url_user).openConnection()
+            connection.setRequestMethod("GET")
+            connection.setRequestProperty("Authorization", "Basic " + encoded_auth)
+            connection.setRequestProperty("Accept", "application/json")
+
+            # Get the response code
+            response_code = connection.getResponseCode()
+
+            if response_code == 200:
+                # Read the response
+                bufferedReader = BufferedReader(InputStreamReader(connection.getInputStream(), "UTF-8"))
+                response_data = []
+                line = bufferedReader.readLine()
+                while line is not None:
+                    response_data.append(line)
+                    line = bufferedReader.readLine()
+                bufferedReader.close()
+
+                # Convert response data to a single string
+                response_str = ''.join(response_data)
+
+                # Parse JSON response
+                json_response = json.loads(response_str)
+
+                # Extract and return the displayName
+                display_name = json_response.get('displayName', 'N/A')
+                return display_name
+
+            elif response_code == 429 or "Retry-After" in connection.getHeaderFields() and retry_count < max_retries:
+                # Handle rate limiting
+                retry_after_header = connection.getHeaderField("Retry-After")
+                if retry_after_header:
+                    retry_delay_millis = 1000 * float(retry_after_header)
+                else:
+                    retry_delay_millis = min(2 * last_delay, max_retry_delay_millis)
+
+                # Add jitter
+                jitter_multiplier = random.uniform(*jitter_multiplier_range)
+                retry_delay_millis = int(retry_delay_millis * jitter_multiplier)
+
+                # Log and delay
+                print("Retrying user fetch after {} ms due to 429 Too Many Requests.".format(retry_delay_millis))
+                Thread.sleep(retry_delay_millis)
+
+                # Update last delay and retry count
+                last_delay = retry_delay_millis
+                retry_count += 1
+
+            else:
+                return "Error fetching user: HTTP response code " + str(response_code)
+
+        except Exception as e:
+            return str(e)
+
+    return "Failed after {} retries.".format(max_retries)
+
+# Example usage
+content_id = value  # 'value' refers to the current cell value of the base column in OpenRefine
+result = fetch_display_name_from_page(content_id)
+return result
